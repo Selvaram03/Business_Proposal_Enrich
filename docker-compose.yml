@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: proposal_db
+      MYSQL_USER: proposal_user
+      MYSQL_PASSWORD: proposal_pass
+      MYSQL_ROOT_PASSWORD: rootpass
+    ports:
+      - "3306:3306"
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - dbdata:/var/lib/mysql
+
+  app:
+    build: .
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: mysql+pymysql://proposal_user:proposal_pass@db:3306/proposal_db
+      APP_SECRET_KEY: super-secret
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+volumes:
+  dbdata:
