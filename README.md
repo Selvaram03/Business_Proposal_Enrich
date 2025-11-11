@@ -17,15 +17,6 @@ CREATE USER 'proposal_user'@'%' IDENTIFIED BY 'proposal_pass';
 GRANT ALL PRIVILEGES ON proposal_db.* TO 'proposal_user'@'%';
 FLUSH PRIVILEGES;
 ```
-Set `DATABASE_URL` to:
-```
-mysql+pymysql://proposal_user:proposal_pass@localhost:3306/proposal_db
-```
-
-### Login (seeded users)
-- admin@enrich.local / Admin@123 (ADMIN)
-- bess@enrich.local / Bess@123 (BESS)
-- epc@enrich.local / Epc@123 (EPC)
 
 ### Role Access
 - **BESS** → BESS Template only
