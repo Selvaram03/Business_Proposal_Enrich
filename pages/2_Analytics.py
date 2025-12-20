@@ -8,7 +8,7 @@ from core.mongo import get_db
 # -------------------------------------------------------------------
 # Page Config & Auth
 # -------------------------------------------------------------------
-st.set_page_config(page_title="Proposal Analytics", layout="wide")
+# st.set_page_config(page_title="Proposal Analytics", layout="wide")
 
 user = st.session_state.get("user")
 if not user:
