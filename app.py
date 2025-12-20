@@ -2,6 +2,9 @@ import streamlit as st
 from services.auth_service import authenticate, init_db, get_user
 from core.config import settings
 
+with st.sidebar:
+    st.image("enrich_logo.png")
+
 st.set_page_config(page_title="Proposal Platform", layout="wide")
 
 # Initialize DB & seed users on first run
