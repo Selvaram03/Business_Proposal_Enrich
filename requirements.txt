@@ -16,3 +16,4 @@ matplotlib==3.9.2
 # Optional PDF conversion (requires system deps)
 docx2pdf==0.1.8
 pymongo
+argon2_cffi
