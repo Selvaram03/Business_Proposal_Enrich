@@ -3,7 +3,7 @@ from sqlalchemy.orm import relationship
 import enum
 from datetime import datetime
 import pytz
-from core.db import Base
+from core.mongo import Base
 
 # ---- IST TIME (naive for MySQL) ----
 IST = pytz.timezone("Asia/Kolkata")

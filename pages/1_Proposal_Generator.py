@@ -1,108 +1,226 @@
 import streamlit as st
 import pandas as pd
-import os, tempfile
+import os
+import tempfile
 from io import BytesIO
-from services.proposal_generator import fill_template
-from services.backups import backup_proposal
-from core.db import get_session
-from core.models import Proposal
-from core.logging_utils import attach_db_sink
-from utils.security import can_use_template
+from datetime import datetime
 from loguru import logger
 
+# Services & utils
+from services.proposal_generator import fill_template
+from services.backups import backup_proposal
+from services.proposal_number import generate_proposal_no
+from core.mongo import get_db
+from utils.security import can_use_template
+
+# -------------------------------------------------------------------
+# Page Config & Session Check
+# -------------------------------------------------------------------
 st.set_page_config(page_title="Proposal Generator", layout="wide")
 
-user = st.session_state.get('user')
+user = st.session_state.get("user")
 if not user:
-    st.warning("Please login on Home page.")
+    st.warning("Please login from the Home page.")
     st.stop()
 
-st.title("🧩 Proposal Generator")
+db = get_db()
 
-# Role‑restricted template selection
-choice = st.radio("Template", ("EPC Template", "BESS Template"), horizontal=True)
-if not can_use_template(user['role'], choice):
-    st.error(f"Your role ({user['role']}) is not permitted to use {choice}.")
+st.title("🧩 Business Proposal Generator")
+
+# -------------------------------------------------------------------
+# Template Selection (Role Restricted)
+# -------------------------------------------------------------------
+template_choice = st.radio(
+    "Select Template",
+    ("EPC Template", "BESS Template"),
+    horizontal=True
+)
+
+if not can_use_template(user["role"], template_choice):
+    st.error(
+        f"Your role ({user['role']}) is not permitted to use {template_choice}."
+    )
     st.stop()
 
-# File paths
-TEMPLATE_PATH = os.path.join('templates', 'EPC_Template.docx' if choice.startswith('EPC') else 'BESS_Template.docx')
-TEMPLATE_EXCEL = os.path.join('templates', 'Input_EPC_Proposal.xlsx' if choice.startswith('EPC') else 'Input_BESS_Proposal.xlsx')
+# -------------------------------------------------------------------
+# Template File Paths
+# -------------------------------------------------------------------
+TEMPLATE_DOCX = os.path.join(
+    "templates",
+    "EPC_Template.docx" if template_choice.startswith("EPC") else "BESS_Template.docx"
+)
 
-# Download sample Excel (if present)
-try:
-    with open(TEMPLATE_EXCEL, 'rb') as f:
-        st.download_button(label=f"📥 Download {choice} Excel Template", data=f, file_name=os.path.basename(TEMPLATE_EXCEL))
-except FileNotFoundError:
-    st.warning("Sample Excel template not found. Please add it to templates/.")
+TEMPLATE_EXCEL = os.path.join(
+    "templates",
+    "Input_EPC_Proposal.xlsx" if template_choice.startswith("EPC") else "Input_BESS_Proposal.xlsx"
+)
 
-# Inputs
-reference_no = st.text_input("Business Proposal Reference No", placeholder="e.g., ENR-2025-000123")
-uploaded_excel = st.file_uploader("Upload filled Excel", type=["xlsx"]) 
+# -------------------------------------------------------------------
+# Download Sample Excel
+# -------------------------------------------------------------------
+if os.path.exists(TEMPLATE_EXCEL):
+    with open(TEMPLATE_EXCEL, "rb") as f:
+        st.download_button(
+            label=f"📥 Download {template_choice} Excel Template",
+            data=f,
+            file_name=os.path.basename(TEMPLATE_EXCEL)
+        )
+else:
+    st.warning("Sample Excel template not found in templates/")
 
-if not reference_no:
-    st.info("Enter a Reference No to enable generation and logging.")
+# -------------------------------------------------------------------
+# Client Input
+# -------------------------------------------------------------------
+client_name = st.text_input(
+    "Client / Company Name",
+    placeholder="e.g., Tata Power"
+)
+
+if not client_name:
+    st.info("Enter Client / Company Name to proceed.")
     st.stop()
+
+# Create a short client code (can be replaced later with master table)
+client_code = client_name.upper().replace(" ", "")[:5]
+
+# -------------------------------------------------------------------
+# Excel Upload
+# -------------------------------------------------------------------
+uploaded_excel = st.file_uploader(
+    "Upload Filled Excel",
+    type=["xlsx"]
+)
 
 if uploaded_excel is None:
     st.stop()
 
-# Read Excel
+# -------------------------------------------------------------------
+# Read & Validate Excel
+# -------------------------------------------------------------------
 try:
-    df = pd.read_excel(uploaded_excel, engine='openpyxl')
+    df = pd.read_excel(uploaded_excel, engine="openpyxl")
     df.columns = df.columns.str.strip()
-    if 'Parameters' not in df.columns or 'Value' not in df.columns:
-        st.error("Excel must have 'Parameters' and 'Value' columns")
+
+    if not {"Parameters", "Value"}.issubset(df.columns):
+        st.error("Excel must contain 'Parameters' and 'Value' columns.")
         st.stop()
+
     df["Parameters"] = df["Parameters"].astype(str).str.strip()
     df["Value"] = df["Value"].astype(str)
-    st.dataframe(df)
+
+    st.subheader("📋 Preview Input Data")
+    st.dataframe(df, use_container_width=True)
+
 except Exception as e:
-    st.error(f"Error reading Excel: {e}")
+    st.error(f"Error reading Excel file: {e}")
     st.stop()
 
-if st.button("🚀 Generate Word Proposal"):
-    with get_session() as session:
-        # Create or get proposal row
-        existing = session.query(Proposal).filter_by(reference_no=reference_no).one_or_none()
-        if existing:
-            proposal = existing
-        else:
-            proposal = Proposal(reference_no=reference_no, template_type='EPC' if choice.startswith('EPC') else 'BESS', created_by=user['id'], meta={})
-            session.add(proposal)
-            session.flush()
+# -------------------------------------------------------------------
+# Generate Proposal
+# -------------------------------------------------------------------
+if st.button("🚀 Generate Proposal"):
+    try:
+        # Generate unique proposal number
+        proposal_no = generate_proposal_no(client_code)
 
-        sink_id = attach_db_sink(session, reference_no, proposal.id)
+        logger.info(f"Generating proposal {proposal_no}")
+
+        # Generate Word document
+        doc = fill_template(df, TEMPLATE_DOCX)
+        word_buffer = BytesIO()
+        doc.save(word_buffer)
+        word_buffer.seek(0)
+
+        # Save proposal metadata in MongoDB
+        db.proposals.insert_one({
+            "proposal_no": proposal_no,
+            "client_name": client_name,
+            "client_code": client_code,
+            "template": template_choice,
+            "created_by": user["id"],
+            "created_at": datetime.utcnow(),
+            "status": "Generated",
+            "parameters": df.to_dict("records")
+        })
+
+        # Analytics log
+        db.analytics_logs.insert_one({
+            "proposal_no": proposal_no,
+            "client_code": client_code,
+            "event": "PROPOSAL_GENERATED",
+            "user": user["id"],
+            "timestamp": datetime.utcnow()
+        })
+
+        st.success(f"✅ Proposal Generated: {proposal_no}")
+
+        # -------------------------------------------------------------------
+        # Download Word
+        # -------------------------------------------------------------------
+        st.download_button(
+            label="⬇️ Download Word Proposal",
+            data=word_buffer.getvalue(),
+            file_name=f"{proposal_no}.docx"
+        )
+
+        # -------------------------------------------------------------------
+        # Optional PDF Conversion
+        # -------------------------------------------------------------------
+        pdf_bytes = None
         try:
-            logger.info(f"Starting generation for {reference_no} using {choice}")
-            doc = fill_template(df, TEMPLATE_PATH)
-            buf = BytesIO(); doc.save(buf); buf.seek(0)
+            from docx2pdf import convert
+            with tempfile.TemporaryDirectory() as tmp:
+                docx_path = os.path.join(tmp, "temp.docx")
+                pdf_path = os.path.join(tmp, "temp.pdf")
 
-            st.success("✅ Word generated")
-            st.download_button(label=f"⬇️ Download {choice.split()[0]} Word", data=buf.getvalue(), file_name=f"Generated_{choice.split()[0]}_{reference_no}.docx")
+                with open(docx_path, "wb") as f:
+                    f.write(word_buffer.getvalue())
 
-            # Optional PDF conversion if Word/LibreOffice exists on host
-            pdf_bytes = None
-            try:
-                from docx2pdf import convert
-                with tempfile.TemporaryDirectory() as td:
-                    docx_path = os.path.join(td, "temp.docx")
-                    pdf_path = os.path.join(td, "temp.pdf")
-                    with open(docx_path, 'wb') as f: f.write(buf.getvalue())
-                    convert(docx_path, pdf_path)
-                    with open(pdf_path, 'rb') as f: pdf_bytes = f.read()
-                st.download_button(label=f"⬇️ Download {choice.split()[0]} PDF", data=pdf_bytes, file_name=f"Generated_{choice.split()[0]}_{reference_no}.pdf")
-            except Exception as e:
-                logger.warning(f"PDF conversion skipped: {e}")
+                convert(docx_path, pdf_path)
 
-            # Backup artifacts
-            artifacts = {f"{reference_no}.docx": buf.getvalue()}
-            if pdf_bytes:
-                artifacts[f"{reference_no}.pdf"] = pdf_bytes
-            meta = {"reference_no": reference_no, "template": choice, "user": user}
-            result = backup_proposal(reference_no, artifacts=artifacts, meta=meta)
-            logger.info(f"Backup stored: {result}")
-            st.info(f"Backup created at: {result.get('local_path')}")
-        finally:
-            from loguru import logger as _lg
-            _lg.remove(sink_id)
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+
+            st.download_button(
+                label="⬇️ Download PDF Proposal",
+                data=pdf_bytes,
+                file_name=f"{proposal_no}.pdf"
+            )
+
+            # Analytics for PDF download
+            db.analytics_logs.insert_one({
+                "proposal_no": proposal_no,
+                "event": "PDF_DOWNLOADED",
+                "timestamp": datetime.utcnow()
+            })
+
+        except Exception as e:
+            logger.warning(f"PDF conversion skipped: {e}")
+
+        # -------------------------------------------------------------------
+        # Backup Artifacts
+        # -------------------------------------------------------------------
+        artifacts = {
+            f"{proposal_no}.docx": word_buffer.getvalue()
+        }
+        if pdf_bytes:
+            artifacts[f"{proposal_no}.pdf"] = pdf_bytes
+
+        backup_meta = {
+            "proposal_no": proposal_no,
+            "client": client_name,
+            "template": template_choice,
+            "user": user
+        }
+
+        backup_result = backup_proposal(
+            proposal_no,
+            artifacts=artifacts,
+            meta=backup_meta
+        )
+
+        st.info(f"📦 Backup created at: {backup_result.get('local_path')}")
+
+    except Exception as e:
+        logger.exception("Proposal generation failed")
+        st.error(f"Proposal generation failed: {e}")
