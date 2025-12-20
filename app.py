@@ -7,7 +7,7 @@ st.set_page_config(page_title="Proposal Platform", layout="wide")
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.image("enrich_logo.png", use_container_width=True)
+    st.image("enrich_logo.png", width=180)
     st.markdown("---")
 
     page = st.navigation({
