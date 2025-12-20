@@ -16,7 +16,7 @@ from utils.security import can_use_template
 # -------------------------------------------------------------------
 # Page Config & Session Check
 # -------------------------------------------------------------------
-st.set_page_config(page_title="Proposal Generator", layout="wide")
+# st.set_page_config(page_title="Proposal Generator", layout="wide")
 
 user = st.session_state.get("user")
 if not user:
